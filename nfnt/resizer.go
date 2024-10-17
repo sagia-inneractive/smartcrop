@@ -38,7 +38,7 @@ type nfntResizer struct {
 	interpolationType resize.InterpolationFunction
 }
 
-func (r nfntResizer) Resize(img image.Image, width, height uint) image.Image {
+func (r nfntResizer) Resize(img image.Image, boosts []options.BoostRectangle, width, height uint) image.Image {
 	return resize.Resize(width, height, img, r.interpolationType)
 }
 

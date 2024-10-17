@@ -80,7 +80,7 @@ const (
 // Analyzer interface analyzes its struct and returns the best possible crop with the given
 // width and height returns an error if invalid
 type Analyzer interface {
-	FindBestCrop(img image.Image, width, height int) (image.Rectangle, error)
+	FindBestCrop(img image.Image, boosts []options.BoostRectangle, width, height int) (image.Rectangle, error)
 }
 
 // Score contains values that classify matches
@@ -88,6 +88,7 @@ type Score struct {
 	Detail     float64
 	Saturation float64
 	Skin       float64
+	Boost      float64
 }
 
 // Crop contains results
@@ -124,7 +125,7 @@ func NewAnalyzerWithLogger(resizer options.Resizer, logger Logger) Analyzer {
 	return &smartcropAnalyzer{Resizer: resizer, logger: logger}
 }
 
-func (o smartcropAnalyzer) FindBestCrop(img image.Image, width, height int) (image.Rectangle, error) {
+func (o smartcropAnalyzer) FindBestCrop(img image.Image, boosts []options.BoostRectangle, width, height int) (image.Rectangle, error) {
 	if width == 0 && height == 0 {
 		return image.Rectangle{}, ErrInvalidDimensions
 	}
@@ -145,6 +146,7 @@ func (o smartcropAnalyzer) FindBestCrop(img image.Image, width, height int) (ima
 
 		smallimg := o.Resize(
 			img,
+			boosts,
 			uint(float64(img.Bounds().Dx())*prescalefactor),
 			0)
 
@@ -163,7 +165,7 @@ func (o smartcropAnalyzer) FindBestCrop(img image.Image, width, height int) (ima
 	o.logger.Log.Printf("original resolution: %dx%d\n", img.Bounds().Dx(), img.Bounds().Dy())
 	o.logger.Log.Printf("scale: %f, cropw: %f, croph: %f, minscale: %f\n", scale, cropWidth, cropHeight, realMinScale)
 
-	topCrop := analyse(o.logger, lowimg, cropWidth, cropHeight, realMinScale)
+	topCrop := analyse(o.logger, lowimg, boosts, cropWidth, cropHeight, realMinScale)
 
 	if prescale == true {
 		topCrop.Min.X = int(chop(float64(topCrop.Min.X) / prescalefactor))
@@ -176,7 +178,8 @@ func (o smartcropAnalyzer) FindBestCrop(img image.Image, width, height int) (ima
 }
 
 func (c Crop) totalScore() float64 {
-	return (c.Score.Detail*detailWeight + c.Score.Skin*skinWeight + c.Score.Saturation*saturationWeight) / float64(c.Dx()) / float64(c.Dy())
+	const boostWeight = 100.0
+	return (c.Score.Detail*detailWeight + c.Score.Skin*skinWeight + c.Score.Saturation*saturationWeight + (c.Score.Boost * boostWeight)) / float64(c.Dx()) / float64(c.Dy())
 }
 
 func chop(x float64) float64 {
@@ -232,6 +235,7 @@ func score(output *image.RGBA, crop Crop) Score {
 			r8 := float64(c.R)
 			g8 := float64(c.G)
 			b8 := float64(c.B)
+			a8 := float64(c.A)
 
 			imp := importance(crop, x, y)
 			det := g8 / 255.0
@@ -239,13 +243,14 @@ func score(output *image.RGBA, crop Crop) Score {
 			score.Skin += r8 / 255.0 * (det + skinBias) * imp
 			score.Detail += det * imp
 			score.Saturation += b8 / 255.0 * (det + saturationBias) * imp
+			score.Boost += a8 / 255.0 * imp
 		}
 	}
 
 	return score
 }
 
-func analyse(logger Logger, img *image.RGBA, cropWidth, cropHeight, realMinScale float64) image.Rectangle {
+func analyse(logger Logger, img *image.RGBA, boosts []options.BoostRectangle, cropWidth, cropHeight, realMinScale float64) image.Rectangle {
 	o := image.NewRGBA(img.Bounds())
 
 	now := time.Now()
@@ -262,6 +267,11 @@ func analyse(logger Logger, img *image.RGBA, cropWidth, cropHeight, realMinScale
 	saturationDetect(img, o)
 	logger.Log.Println("Time elapsed sat:", time.Since(now))
 	debugOutput(logger.DebugMode, o, "saturation")
+
+	now = time.Now()
+	applyBoosts(img, o, boosts)
+	logger.Log.Println("Time elapsed boost:", time.Since(now))
+	debugOutput(logger.DebugMode, o, "boost")
 
 	now = time.Now()
 	var topCrop Crop
@@ -287,6 +297,42 @@ func analyse(logger Logger, img *image.RGBA, cropWidth, cropHeight, realMinScale
 	}
 
 	return topCrop.Rectangle
+}
+
+func applyBoosts(img *image.RGBA, o *image.RGBA, boosts []options.BoostRectangle) {
+	if len(boosts) == 0 {
+		return
+	}
+
+	width := o.Bounds().Dx()
+	height := o.Bounds().Dy()
+
+	for x := 0; x < width; x++ {
+		for y := 0; y < height; y++ {
+			c := o.RGBAAt(x, y)
+			c.A = 0
+			o.SetRGBA(x, y, c)
+		}
+	}
+	for _, boost := range boosts {
+		applyBoost(boost, o)
+	}
+}
+
+func applyBoost(boost options.BoostRectangle, o *image.RGBA) {
+	x0 := boost.Min.X
+	x1 := boost.Min.X + boost.Dx()
+	y0 := boost.Min.Y
+	y1 := boost.Min.Y + boost.Dy()
+	weight := boost.Weight * 255
+
+	for y := y0; y < y1; y++ {
+		for x := x0; x < x1; x++ {
+			c := o.RGBAAt(x, y)
+			c.A = uint8(math.Min(float64(c.A)+weight, 255))
+			o.SetRGBA(x, y, c)
+		}
+	}
 }
 
 func saturation(c color.RGBA) float64 {
@@ -376,7 +422,7 @@ func edgeDetect(i *image.RGBA, o *image.RGBA) {
 					cies[x+(y+1)*width]
 			}
 
-			nc := color.RGBA{0, uint8(bounds(lightness)), 0, 255}
+			nc := color.RGBA{0, uint8(bounds(lightness)), 0, 0}
 			o.SetRGBA(x, y, nc)
 		}
 	}
@@ -394,10 +440,10 @@ func skinDetect(i *image.RGBA, o *image.RGBA) {
 			c := o.RGBAAt(x, y)
 			if skin > skinThreshold && lightness >= skinBrightnessMin && lightness <= skinBrightnessMax {
 				r := (skin - skinThreshold) * (255.0 / (1.0 - skinThreshold))
-				nc := color.RGBA{uint8(bounds(r)), c.G, c.B, 255}
+				nc := color.RGBA{uint8(bounds(r)), c.G, c.B, 0}
 				o.SetRGBA(x, y, nc)
 			} else {
-				nc := color.RGBA{0, c.G, c.B, 255}
+				nc := color.RGBA{0, c.G, c.B, 0}
 				o.SetRGBA(x, y, nc)
 			}
 		}
@@ -416,10 +462,10 @@ func saturationDetect(i *image.RGBA, o *image.RGBA) {
 			c := o.RGBAAt(x, y)
 			if saturation > saturationThreshold && lightness >= saturationBrightnessMin && lightness <= saturationBrightnessMax {
 				b := (saturation - saturationThreshold) * (255.0 / (1.0 - saturationThreshold))
-				nc := color.RGBA{c.R, c.G, uint8(bounds(b)), 255}
+				nc := color.RGBA{c.R, c.G, uint8(bounds(b)), 0}
 				o.SetRGBA(x, y, nc)
 			} else {
-				nc := color.RGBA{c.R, c.G, 0, 255}
+				nc := color.RGBA{c.R, c.G, 0, 0}
 				o.SetRGBA(x, y, nc)
 			}
 		}

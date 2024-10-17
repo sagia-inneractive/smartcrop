@@ -109,7 +109,7 @@ func crop(img image.Image, w, h int, resize bool) image.Image {
 	}
 	img = img.(SubImager).SubImage(topCrop)
 	if resize && (img.Bounds().Dx() != width || img.Bounds().Dy() != height) {
-		img = resizer.Resize(img, uint(width), uint(height))
+		img = resizer.Resize(img, nil, uint(width), uint(height))
 	}
 	return img
 }

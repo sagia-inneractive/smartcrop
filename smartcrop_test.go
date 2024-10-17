@@ -30,6 +30,7 @@ package smartcrop
 import (
 	"errors"
 	"fmt"
+	"github.com/muesli/smartcrop/options"
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
@@ -46,9 +47,9 @@ var (
 )
 
 // Moved here and unexported to decouple the resizer implementation.
-func smartCrop(img image.Image, width, height int) (image.Rectangle, error) {
+func smartCrop(img image.Image, width, height int, boost []options.BoostRectangle) (image.Rectangle, error) {
 	analyzer := NewAnalyzer(nfnt.NewDefaultResizer())
-	return analyzer.FindBestCrop(img, width, height)
+	return analyzer.FindBestCrop(img, boost, width, height)
 }
 
 type SubImager interface {
@@ -64,11 +65,42 @@ func TestCrop(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	topCrop, err := smartCrop(img, 250, 250)
+	topCrop, err := smartCrop(img, 250, 250, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	expected := image.Rect(464, 24, 719, 279)
+	if topCrop != expected {
+		t.Fatalf("expected %v, got %v", expected, topCrop)
+	}
+
+	sub, ok := img.(SubImager)
+	if ok {
+		cropImage := sub.SubImage(topCrop)
+		// cropImage := sub.SubImage(image.Rect(topCrop.X, topCrop.Y, topCrop.Width+topCrop.X, topCrop.Height+topCrop.Y))
+		writeImage("jpeg", cropImage, "./smartcrop.jpg")
+	} else {
+		t.Error(errors.New("No SubImage support"))
+	}
+}
+
+func TestCropWithBoost(t *testing.T) {
+	fi, _ := os.Open(testFile)
+	defer fi.Close()
+
+	img, _, err := image.Decode(fi)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	topCrop, err := smartCrop(img, 250, 250, []options.BoostRectangle{{
+		Weight:    1,
+		Rectangle: image.Rect(350, 20, 500, 100),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := image.Rect(296, 0, 551, 255)
 	if topCrop != expected {
 		t.Fatalf("expected %v, got %v", expected, topCrop)
 	}
@@ -97,7 +129,7 @@ func BenchmarkCrop(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := smartCrop(img, 250, 250); err != nil {
+		if _, err := smartCrop(img, 250, 250, nil); err != nil {
 			b.Error(err)
 		}
 	}
@@ -141,7 +173,7 @@ func BenchmarkImageDir(b *testing.B) {
 				continue
 			}
 
-			topCrop, err := smartCrop(img, 220, 220)
+			topCrop, err := smartCrop(img, 220, 220, nil)
 			if err != nil {
 				b.Error(err)
 				continue
