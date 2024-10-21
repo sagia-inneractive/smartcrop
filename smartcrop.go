@@ -63,11 +63,11 @@ const (
 	saturationBrightnessMax = 0.9
 	saturationThreshold     = 0.4
 	saturationBias          = 0.2
-	saturationWeight        = 0.3
+	saturationWeight        = 0.1
 	scoreDownSample         = 8 // step * minscale rounded down to the next power of two should be good
 	step                    = 8
 	scaleStep               = 0.1
-	minScale                = 0.9
+	minScale                = 1.0
 	maxScale                = 1.0
 	edgeRadius              = 0.4
 	edgeWeight              = -20.0
@@ -75,6 +75,7 @@ const (
 	ruleOfThirds            = true
 	prescale                = true
 	prescaleMin             = 400.00
+	boostWeight             = 100
 )
 
 // Analyzer interface analyzes its struct and returns the best possible crop with the given
@@ -178,8 +179,7 @@ func (o smartcropAnalyzer) FindBestCrop(img image.Image, boosts []options.BoostR
 }
 
 func (c Crop) totalScore() float64 {
-	const boostWeight = 100.0
-	return (c.Score.Detail*detailWeight + c.Score.Skin*skinWeight + c.Score.Saturation*saturationWeight + (c.Score.Boost * boostWeight)) / float64(c.Dx()) / float64(c.Dy())
+	return (c.Score.Detail*detailWeight + c.Score.Skin*skinWeight + c.Score.Saturation*saturationWeight + (c.Score.Boost * boostWeight)) / (float64(c.Dx()) * float64(c.Dy()))
 }
 
 func chop(x float64) float64 {
