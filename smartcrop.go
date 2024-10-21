@@ -75,7 +75,7 @@ const (
 	ruleOfThirds            = true
 	prescale                = true
 	prescaleMin             = 400.00
-	boostWeight             = 100
+	boostWeight             = 200
 )
 
 // Analyzer interface analyzes its struct and returns the best possible crop with the given
